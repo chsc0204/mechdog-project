@@ -1,0 +1,24 @@
+{
+  "room_a": {
+    "name": "회의실A",
+    "steps": [
+      {"move_mm": 80, "angle_deg": 0, "hold_sec": 2.0, "desc": "직진"},
+      {"move_mm": 80, "angle_deg": 25, "hold_sec": 1.5, "desc": "좌회전하며 전진"},
+      {"move_mm": 80, "angle_deg": 0, "hold_sec": 2.0, "desc": "직진"}
+    ]
+  },
+  "room_b": {
+    "name": "회의실B",
+    "steps": [
+      {"move_mm": 80, "angle_deg": 0, "hold_sec": 1.5, "desc": "직진"},
+      {"move_mm": 80, "angle_deg": -25, "hold_sec": 1.5, "desc": "우회전하며 전진"},
+      {"move_mm": 80, "angle_deg": 0, "hold_sec": 2.5, "desc": "직진"}
+    ]
+  },
+  "lobby": {
+    "name": "로비",
+    "steps": [
+      {"move_mm": 80, "angle_deg": 0, "hold_sec": 3.0, "desc": "직진"}
+    ]
+  }
+}

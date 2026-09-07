@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres
+    container_name: mechdog-postgres
+    environment:
+      POSTGRES_PASSWORD: mechdog1234
+      POSTGRES_DB: mechdog
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mechdog-mqtt
+    ports:
+      - "1883:1883"
+    restart: unless-stopped
+
+  bridge:
+    build: .
+    container_name: mechdog-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    environment:
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      DB_HOST: postgres
+      DB_PORT: 5432
+    volumes:
+      - ./dataset:/data/dataset:ro
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
