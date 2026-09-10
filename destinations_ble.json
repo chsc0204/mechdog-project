@@ -1,0 +1,25 @@
+{
+  "_calibration_note": "2026-09-10 실측: 직진(dir=3) 2.0초 -> 약 45cm 이동 (초속 약 22.5cm/s, 완충 배터리 기준). 약우회전(dir=2) 1.5초 -> 약 30도, 강우회전(dir=1) 1.5초 -> 약 60도 회전 (눈대중, 약회전 대비 약 2배). 실제 목적지 배치 시 이 값들 기준으로 hold_sec 재계산 필요.",
+  "room_a": {
+    "name": "회의실A",
+    "steps": [
+      {"dir": 3, "hold_sec": 2.0, "desc": "직진"},
+      {"dir": 2, "hold_sec": 1.5, "desc": "약하게 우회전"},
+      {"dir": 3, "hold_sec": 2.0, "desc": "직진"}
+    ]
+  },
+  "room_b": {
+    "name": "회의실B",
+    "steps": [
+      {"dir": 3, "hold_sec": 1.5, "desc": "직진"},
+      {"dir": 4, "hold_sec": 1.5, "desc": "약하게 좌회전"},
+      {"dir": 3, "hold_sec": 2.5, "desc": "직진"}
+    ]
+  },
+  "lobby": {
+    "name": "로비",
+    "steps": [
+      {"dir": 3, "hold_sec": 3.0, "desc": "직진"}
+    ]
+  }
+}
