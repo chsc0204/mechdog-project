@@ -1,102 +1,96 @@
-# MechDog 프로젝트 - DB / 인프라 파트 (담당: 최현수)
+# MechDog Project — Dog C (목적지 유도·에스코트) + DB/인프라
 
-## 개요
-- 3번 파트(목적지 유도·에스코트) + DB 파트 겸직
-- PostgreSQL + MQTT 브로커 + MQTT→DB 브릿지를 Docker Compose로 통합 관리
-- 웹캠 기반 얼굴인식(LBPH) 및 Pass/Non-Pass 판정 로직 포함
+> ⚠️ **진행 중인 프로젝트**입니다. 2026 미래내일 일경험 지원사업(ESG지원형) 청년피지컬AI일경험 팀 프로젝트의 일부이며, 최종 발표(5회차)까지 계속 업데이트됩니다.
 
-## 폴더 구조
+## 담당 및 역할
+- **로봇 파트**: Dog C — 목적지 유도·에스코트 (Hiwonder MechDog, ESP32 기반 사족보행 로봇)
+- **겸직 파트**: 팀 전체 DB 설계·통합 (PostgreSQL + MQTT)
+
+---
+
+## 무엇을 만들었나
+
+방문자를 목적지까지 안내하고, 도착 시 인사하며, 터치센서로 다음 안내를 준비하는 **완전 무선 에스코트 로봇 시스템**입니다.
+
+```
+목적지 입력 → 웨이포인트 이동 (자동 확장형 장애물 회피 포함)
+   → 도착 → 인사 동작
+   → 터치센서로 다음 안내 확인 (타임아웃 안전장치 포함)
+   → 모든 상태를 MQTT로 실시간 발행 → PostgreSQL 저장
+```
+
+## 기술적으로 해결한 문제들
+
+프로젝트 진행 중 마주친 실제 엔지니어링 문제와 해결 과정입니다.
+
+- **공식 API 문서 없이 BLE 통신 프로토콜 역분석**: 제조사 공식 앱의 디컴파일된 코드를 분석해 이동/동작/센서조회 명령 체계(`CMD|N|params|$`)를 알아내고, USB 없이 완전 무선으로 로봇을 제어하는 파이썬 클라이언트를 직접 구현
+- **로봇 자체 펌웨어(MicroPython) 확장**: 기존 이동 명령 체계에 없던 기능(제자리 회전, 터치센서 상태 조회, MP3 재생)을 로봇 실행 프로그램에 직접 추가
+- **실측 기반 캘리브레이션**: 이론값이 아닌 실제 로봇 속도(초당 이동거리, 회전각도)를 측정해 웨이포인트 정확도 개선 — 이 과정에서 좌/우 방향 코드가 반대로 매핑된 실제 조향 버그를 발견 및 수정
+- **하드웨어 제약을 고려한 설계 전환**: 원래 계획이었던 카메라 기반 실시간 추적이 하드웨어 불안정성으로 어려워지자, 웨이포인트+거리센서+터치센서 조합으로 설계를 재구성해 안정적인 대안 아키텍처 확립
+- **자동 확장형 장애물 회피 알고리즘**: 정면 거리센서 하나만으로, 좁은 장애물과 넓은 장애물(벽 등)에 모두 대응 가능하도록 재시도할수록 회피 반경이 커지는 로직 설계
+- **팀 전체 DB 스키마 통합**: 4개 파트(출입인증/대화/에스코트/보안관제)가 독립적으로 설계한 데이터 요구사항을 하나의 PostgreSQL 스키마로 통합, 공용 세션 원장 테이블 설계 및 이벤트 매칭 키(`msg_id`) 도입
+- **Docker 기반 인프라 구축**: PostgreSQL + MQTT 브로커 + MQTT→DB 브릿지를 Docker Compose로 통합 관리, 컨테이너 간 네트워킹 이슈(localhost vs 서비스명) 해결
+
+## 사용 기술
+`Python` `MicroPython` `Bluetooth LE (bleak)` `PostgreSQL` `SQL` `MQTT (paho-mqtt)` `Docker / Docker Compose` `OpenCV (ArUco)` `Git`
+
+---
+
+## 폴더 구조 (주요 파일)
+
 ```
 Mechdog/
-├── dataset/                    # 등록된 얼굴 사진 (사람별 폴더)
-├── backups/                    # DB 백업 .sql 파일
-├── docker-compose.yml          # 전체 인프라 정의 (postgres, mqtt, bridge)
-├── Dockerfile                  # bridge 서비스 이미지 빌드용
-├── requirements.txt            # bridge 서비스 파이썬 패키지 목록
-├── mqtt_db_bridge.py           # MQTT 메시지를 받아 DB에 저장하는 브릿지 서비스
-├── pg_setup.py                 # PostgreSQL 테이블 생성 (SQLAlchemy)
-├── seed_faces_pg.py            # dataset 폴더 기준 얼굴 등록 정보를 DB에 삽입
-├── capture_faces.py            # 웹캠으로 얼굴 최초 등록 (30장 촬영)
-├── capture_more_faces.py       # 기존 등록자에 사진 추가 촬영 (인식률 개선용)
-├── train_faces.py              # LBPH 모델 학습 (trainer.yml 생성)
-├── recognize_faces.py          # 실시간 얼굴인식 + Pass/Non-Pass + DB 로깅
-├── backup_db.py                # PostgreSQL 백업 (.sql 파일 생성)
-├── download_cascade.py         # 얼굴 검출용 haarcascade 파일 다운로드
-├── mqtt_publisher_test2.py     # 브릿지 서비스 테스트용 메시지 전송
-└── mqtt_subscriber_test.py     # MQTT 통신 자체 테스트용
+├── escort_ble_no_camera.py     # 메인 에스코트 실행 스크립트 (노트북 측)
+├── main_with_rotate.py         # 로봇 실행 펌웨어 (MicroPython, 로봇에 업로드)
+├── destinations_ble.json       # 목적지-웨이포인트 매핑 (실측 보정값 포함)
+├── mechdog_team_schema.sql     # 팀 전체 통합 DB 스키마
+├── mqtt_db_bridge.py           # MQTT → DB 저장 브릿지
+├── docker-compose.yml          # 인프라 정의 (postgres, mqtt, bridge)
+├── ble_scan.py                 # BLE 서비스/특성 진단 도구
+├── calibration_test.py         # 이동거리/회전각도 실측 도구
+├── check_recent_events.py      # DB 이벤트 로그 집계 확인
+└── generate_markers.py         # ArUco 마커 생성 (확장 대비용, 현재 미사용)
 ```
 
-## 최초 세팅 순서 (다른 컴퓨터/팀원이 처음 실행할 때)
+## 실행 방법
 
-1. Docker Desktop 설치 (WSL2 백엔드 필요)
-2. haarcascade 파일 다운로드
-   ```
-   python download_cascade.py
-   ```
-   (C:\cv_data 폴더에 저장됨 - 한글 사용자 경로 문제 우회용)
-3. Docker Compose로 인프라 실행
-   ```
-   docker compose up -d
-   ```
-4. DB 테이블 생성
-   ```
-   python pg_setup.py
-   ```
-5. 얼굴 등록 (본인 얼굴)
-   ```
-   python capture_faces.py
-   ```
-6. 인식률 개선을 위해 다양한 거리/각도로 추가 촬영 (권장)
-   ```
-   python capture_more_faces.py
-   ```
-7. 모델 학습
-   ```
-   python train_faces.py
-   ```
-8. DB에 등록 정보 반영
-   ```
-   python seed_faces_pg.py
-   ```
-9. 실시간 인식 테스트
-   ```
-   python recognize_faces.py
-   ```
+**1. 인프라 실행**
+```
+docker compose up -d
+```
 
-## 평소 사용 (인프라 이미 세팅된 경우)
+**2. 로봇에 펌웨어 업로드**
+Hiwonder Python Editor로 `main_with_rotate.py`를 로봇에 업로드 후 `main.py`로 저장, 재부팅
 
-- 인프라 켜기: `docker compose up -d`
-- 인프라 끄기: `docker compose down` (데이터는 volume에 보존됨)
-- 브릿지 로그 확인: `docker logs mechdog-bridge` (버퍼링으로 안 보일 수 있음 → `docker compose run --rm bridge`로 대체 확인)
-- DB 백업: `python backup_db.py`
+**3. 에스코트 실행** (USB 불필요, 블루투스만 사용)
+```
+python escort_ble_no_camera.py
+```
 
-## DB 접속 정보
-- Host: localhost (컨테이너 내부에서는 `postgres`)
-- Port: 5432
-- DB명: mechdog
-- User: postgres
-- Password: mechdog1234
+**4. DB 확인**
+```
+python check_recent_events.py
+```
 
-## MQTT 연동 (팀 공용)
-- Broker: localhost:1883 (컨테이너 내부에서는 `mosquitto`)
-- 브릿지가 구독 중인 토픽 (팀원들과 실제 이름 재확인 필요):
-  - `escort/status` (3번 파트)
-  - `auth/result` (1번 파트)
-  - `interaction/event` (2번 파트)
-  - `security/alert` (4번 파트)
-- 메시지 형식 (JSON):
-  ```json
-  {"robot_id": 3, "event_type": "도착완료", "detail": "회의실A 도착, 인사동작 재생"}
-  ```
+## 현재 상태 (진행 중)
 
-## 알려진 이슈 / 주의사항
-- **Windows 한글 경로**: 사용자명에 한글이 있으면 OpenCV의 CascadeClassifier가 경로를 못 읽음 → haarcascade 파일을 `C:\cv_data`처럼 영문 경로에 별도 저장해서 사용 중
-- **PostgreSQL 18+ 볼륨 경로**: `/var/lib/postgresql/data`가 아니라 `/var/lib/postgresql`에 마운트해야 함 (구버전과 다름)
-- **PowerShell 리다이렉션(`<`) 미지원**: `.sql` 복원 시 `cmd /c "..."`로 감싸서 실행해야 인코딩도 안 깨지고 정상 작동
-- **LBPH 인식 임계값(THRESHOLD)**: 조명/거리에 따라 민감하게 변함. `recognize_faces.py`의 `THRESHOLD` 값을 상황에 맞게 조정 필요 (현재 85 근처로 설정, 본인 확인 후 필요시 재조정)
-- **docker logs 버퍼링**: `mqtt_db_bridge.py`가 정상 작동해도 `docker logs`에 출력이 안 보일 수 있음 → `docker compose run --rm bridge`로 실시간 확인 가능 (Dockerfile에 `PYTHONUNBUFFERED=1` 반영 완료)
+| 기능 | 상태 |
+|---|---|
+| 블루투스 무선 이동 제어 | ✅ 완료 |
+| 웨이포인트 기반 목적지 이동 | ✅ 완료 |
+| 장애물 자동 회피 (자동 확장형) | ✅ 완료 |
+| 터치센서 인터랙션 | ✅ 완료 |
+| MQTT → DB 실시간 저장 | ✅ 완료 |
+| 팀 전체 DB 스키마 통합 | ✅ 완료 (일부 항목 팀원 확인 대기) |
+| MP3 음성 안내 | ⏸️ 보류 (스피커 하드웨어 불량, 소프트웨어는 검증 완료) |
+| ArUco 마커 기반 추적 | 🔧 코드 완성, 카메라 하드웨어 불안정으로 미사용 |
 
-## 다음 할 일
-- 팀원들과 MQTT 토픽 이름 및 JSON 형식 최종 확정
-- 데이터 다양성 확보를 위한 추가 얼굴 등록 (팀원 전체)
-- 이미지/오디오 파일의 Docker Volume 관리 확장 (현재 bridge 서비스에 `./dataset` 읽기 전용 마운트 준비됨)
+## 알려진 이슈
+- MP3 스피커 모듈: 파일명 규칙·통신·포트는 전부 정상 확인됐으나 실제 음향 출력이 안 되는 상태 (하드웨어 교체 필요 추정)
+- 정면 거리센서 1개만 사용 중이라, 낮거나 얇은 장애물(예: 책상다리) 감지에 한계 있음
+- 카메라(ESP32-CAM WiFi 스트림)는 반복적인 연결 불안정으로 현재 메인 로직에서 제외
+
+## 다음 계획
+- 팀원 데이터 최종 확인 후 DB 스키마 마무리 (`system_health` 테이블 등)
+- 전체 시나리오 반복 안정성 테스트
+- 최종 발표 준비
