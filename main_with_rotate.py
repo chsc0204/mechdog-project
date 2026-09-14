@@ -35,6 +35,20 @@ ble = BLE(BLE.MODE_BLE_SLAVE,"MechDog_{:02X}".format(mac[5]))
 mechdog = MechDog()
 i2c1 = Hiwonder_IIC.IIC(1)
 i2csonar = Hiwonder_IIC.I2CSonar(i2c1)
+try:
+  mp3 = Hiwonder_IIC.MP3(i2c1)  # [추가] MP3 안내음성 모듈 (하드웨어 불량으로 보류 중, 없어도 안전하게 넘어감)
+  mp3.volume(25)
+except Exception:
+  mp3 = None
+  print("MP3 모듈 초기화 실패 - MP3 기능 없이 계속 진행합니다.")
+button3 = Hiwonder.Button(3)  # [추가] 터치센서 (포트 3)
+_TOUCH_FLAG = 0  # [추가] 터치 감지 플래그
+
+def _on_touch3():  # [추가] 터치 콜백
+  global _TOUCH_FLAG
+  _TOUCH_FLAG = 1
+
+button3.Clicked(_on_touch3)  # [추가]
 
 time.sleep(1)
 
@@ -59,6 +73,7 @@ def start_main():
   global _High_mm
   global _ROTATE_DEG  # [추가]
   global _ROTATE_COUNT  # [추가]
+  global _TOUCH_FLAG  # [추가]
 
   dir_flag = 1
   while True:
@@ -172,6 +187,22 @@ def start_main():
             _ROTATE_COUNT = int(_REC_PARSE_VALUE[2])
           else:
             _ROTATE_COUNT = 40
+        # [추가] CMD|11|1|$ : 터치센서 눌림 여부 조회 -> 응답 후 플래그 리셋
+        if (_COMMAND==11):
+          _SEND_DATA = "CMD|11|{}|$".format(_TOUCH_FLAG)
+          ble.send_data(_SEND_DATA)
+          _TOUCH_FLAG = 0
+          continue
+        # [추가] CMD|12|{track}|$ : MP3 트랙 재생 (MP3 모듈 없으면 무시)
+        if (_COMMAND==12) and (_obstacle_avoidance_flag==0) and (_self_balancing_flag==0):
+          _DATA = int(_REC_PARSE_VALUE[1])
+          if mp3 is not None:
+            try:
+              mp3.play(_DATA)
+              mp3.play()
+            except Exception:
+              pass
+          continue
       else:
         time.sleep(0.03)
 

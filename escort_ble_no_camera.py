@@ -58,11 +58,16 @@ async def interruptible_sleep(duration):
 latest_distance = None
 
 def on_notify(sender, data):
-    global latest_distance
+    global latest_distance, latest_touch
     text = data.decode(errors="ignore")
     if text.startswith("CMD|4|"):
         try:
             latest_distance = float(text.split("|")[2]) / 10.0  # 실측 후 스케일 보정 필요
+        except (IndexError, ValueError):
+            pass
+    elif text.startswith("CMD|11|"):
+        try:
+            latest_touch = int(text.split("|")[2])
         except (IndexError, ValueError):
             pass
 
@@ -172,6 +177,18 @@ async def request_distance(client):
     await asyncio.sleep(0.2)
     return latest_distance
 
+latest_touch = 0
+
+async def request_touch(client):
+    """터치센서가 마지막 확인 이후 눌렸는지 확인 (한 번 확인하면 로봇 쪽에서 자동 리셋됨)"""
+    global latest_touch
+    await ble_send(client, "CMD|11|1|$")
+    await asyncio.sleep(0.2)
+    return latest_touch == 1
+
+async def play_mp3(client, track=1):
+    await ble_send(client, f"CMD|12|{track}|$")
+
 def publish_status(event_type, detail):
     message = {"robot_id": 3, "event_type": event_type, "detail": detail}
     try:
@@ -203,11 +220,23 @@ async def goto_destination(client, dest_id, destinations):
         print("\n===== 도착 인사 =====")
         print("[안내 멘트] 목적지에 도착했습니다. 안내를 종료합니다. 감사합니다!")
         await ble_send(client, "CMD|2|1|8|$")  # scrape_a_bow
+        # await play_mp3(client, track=1)  # MP3 음성 안내 - 스피커 하드웨어 불량으로 보류 (2026-09-14)
         await interruptible_sleep(4)  # 동작 재생 대기
         publish_status("도착완료", f"{dest['name']} 도착, 인사동작 재생")
 
-        print(f"\n{DWELL_SECONDS}초간 대기 후 다음 안내 준비 상태로 전환합니다...")
-        await interruptible_sleep(DWELL_SECONDS)
+        print("\n방문자가 터치센서를 눌러 다음 안내를 시작할 수 있습니다.")
+        print(f"(최대 {DWELL_SECONDS}초간 대기, 터치 없으면 자동으로 준비 상태 전환)")
+        touched = False
+        for _ in range(int(DWELL_SECONDS / 0.5)):
+            if await request_touch(client):
+                touched = True
+                print("터치 확인! 바로 다음 안내 준비 상태로 전환합니다.")
+                break
+            await interruptible_sleep(0.5)
+
+        if not touched:
+            print("터치 없어 시간 초과, 자동으로 다음 안내 준비 상태로 전환합니다.")
+
         publish_status("대기준비완료", "다음 방문자 안내 준비 완료")
         print("===== 다음 안내 준비 완료 =====\n")
 
