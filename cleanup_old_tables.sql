@@ -1,2 +1,0 @@
-DROP TABLE IF EXISTS auth_logs CASCADE;
-DROP TABLE IF EXISTS registered_faces CASCADE;
