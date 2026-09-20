@@ -200,10 +200,33 @@ CREATE INDEX idx_alert_logs_resolved    ON alert_logs (resolved);
 
 
 -- ============================================================
--- 5. 공용 테이블 진행상황
---    alerts  -> D의 alert_logs로 통합 확정 (레벨/사유가 범용 TEXT라
---               A의 보안경고, B의 대화이상(dialog_timeout 등) 전부 수용 가능)
---    system_health -> 아직 미수신. B가 요청했던 노드 상태 이력 테이블.
---                      A/B/D 전체에게 다시 확인 필요
+-- 5. 공용 테이블 — system_health (노드 상태 이력)
+--    출처: B가 남긴 스펙(node, status 5종, "이력 테이블 필요")을 바탕으로
+--    최현수가 임의 설계함. 추후 팀 피드백 있으면 조정 가능.
 -- ============================================================
--- system_health 대기 중
+
+CREATE TABLE system_health (
+    health_id    BIGSERIAL   PRIMARY KEY,
+    node         TEXT        NOT NULL,   -- 예: mechdog_a, mechdog_b, mechdog_c, mechdog_d
+    status       TEXT        NOT NULL,   -- booting | ready | busy | error | offline
+    occurred_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    detail       TEXT                    -- 선택: 에러 메시지 등 추가 정보
+);
+
+COMMENT ON TABLE  system_health         IS '각 파트(노드)의 상태 변화 이력. 최신값 덮어쓰기 아님 - 매 상태변화마다 새 행 추가';
+COMMENT ON COLUMN system_health.node    IS '상태를 보고하는 주체. 예: mechdog_a, mechdog_b, mechdog_c, mechdog_d';
+COMMENT ON COLUMN system_health.status  IS '허용값: booting, ready, busy, error, offline';
+
+CREATE INDEX idx_system_health_node_time ON system_health (node, occurred_at DESC);
+
+
+-- ============================================================
+-- 6. 참고 — 미등록 방문자 통계 (5-2 관련 최종 결정)
+--    결정: 별도 visitor_id/카운팅 컬럼 신설 안 함 (여도훈님 확정)
+--    -> 필요할 때 COUNT(*)로 계산해서 사용 (스키마 변경 불필요)
+-- ============================================================
+
+-- 예시: 미등록 방문자 중 허용(allow)된 방문 횟수 집계
+-- SELECT COUNT(*) AS unregistered_visit_count
+-- FROM access_decisions
+-- WHERE person_id IS NULL AND decision = 'allow';
