@@ -1,0 +1,42 @@
+{
+  "_설명": "시연 장소에서 숫자만 바꾸면 되는 경로 파일. go=직진(cm), back=후진(cm), turn=제자리 회전(도, +좌/-우). return을 생략하면 '180도 회전 -> 역순 경로 -> 180도 회전'으로 복귀 자동 생성. alias=입력용 별명(여러 개 가능)",
+  "_calibration": {
+    "_설명": "시연 장소에서 escort_wifi.py의 calib 명령으로 자동 보정됨. 아래는 오늘 실측 기반 추정값",
+    "speed_cm_per_s": 32.78,
+    "back_speed_cm_per_s": 7.5,
+    "spin_count_per_90": 146,
+    "spin_count_per_180": 328,
+    "straight_trim": -7,
+    "straight_speed": 180
+  },
+  "meeting_room_1": {
+    "name": "회의실 1",
+    "alias": [
+      "회의실",
+      "1번"
+    ],
+    "path": [
+      {
+        "go": 59
+      },
+      {
+        "turn": 90
+      },
+      {
+        "go": 140
+      },
+      {
+        "turn": 90
+      },
+      {
+        "go": 100
+      },
+      {
+        "turn": -90
+      },
+      {
+        "go": 150
+      }
+    ]
+  }
+}

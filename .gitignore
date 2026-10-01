@@ -15,3 +15,22 @@ __pycache__/
 # 마커 이미지는 그냥 QR코드 비슷한 패턴이라 올려도 무방하지만,
 # 혹시 제외하고 싶으면 아래 주석 해제
 # marker_*.png
+
+# 비밀번호/개인 설정 (공개 저장소 - 절대 커밋 금지)
+wifi_config.py
+secrets.h
+config_local.py
+.env
+
+# 에디터/OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# 테스트 스냅샷 / YOLO 모델 파일
+snapshots/
+*.pt
+
+*.bak
+*.part

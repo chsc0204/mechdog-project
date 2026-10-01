@@ -127,7 +127,7 @@ async def avoid_obstacle(client, attempt=1):
     await interruptible_sleep(0.2)
 
 
-async def execute_step_with_obstacle_check(client, dir_code, hold_sec):
+async def execute_step_with_obstacle_check(client, dir_code, hold_sec, context="outbound"):
     """이동 명령을 보내고, 그 시간(hold_sec) 내내 계속 장애물을 확인.
     장애물 감지되면 회피 기동(후진+방향틀기) 후 원래 방향으로 이동 재개.
     회피를 여러 번 반복해도 계속 막히면 포기하고 정지 상태로 남김."""
@@ -136,15 +136,21 @@ async def execute_step_with_obstacle_check(client, dir_code, hold_sec):
     elapsed = 0.0
     check_interval = 0.25
     MAX_AVOID_ATTEMPTS = 4
+    last_status_publish = 0.0  # [추가] 1Hz 상태 발행용 타이머
 
     while elapsed < hold_sec:
         if stop_event.is_set():
             raise EmergencyStop()
 
+        # [추가] 약 1초에 한 번씩 이동중 상태 발행 (1Hz, retain) - 통합 AI Flow 스펙 반영
+        if elapsed - last_status_publish >= 1.0:
+            publish_status("moving", "웨이포인트 이동 중", context=context)
+            last_status_publish = elapsed
+
         dist = await request_distance(client)
         if dist is not None and dist < OBSTACLE_THRESHOLD:
             print(f"    [경고] 이동 중 장애물 감지({dist:.0f}cm) - 회피 기동 시작")
-            publish_status("장애물감지", f"이동 중 {dist:.0f}cm 거리에서 회피 기동 시작")
+            publish_status("moving", f"이동 중 {dist:.0f}cm 거리에서 회피 기동 시작", context=context)
 
             avoided = False
             for attempt in range(1, MAX_AVOID_ATTEMPTS + 1):
@@ -158,7 +164,7 @@ async def execute_step_with_obstacle_check(client, dir_code, hold_sec):
 
             if not avoided:
                 print("    회피 실패, 정지 상태로 대기 (수동 확인 필요)")
-                publish_status("회피실패", "여러 번 회피 시도했으나 계속 막힘")
+                publish_alert("escort_lost", "여러 번 회피 시도했으나 계속 막힘")
                 await stop(client)
                 return  # 이 스텝은 포기하고 정지 상태로 함수 종료
 
@@ -189,16 +195,47 @@ async def request_touch(client):
 async def play_mp3(client, track=1):
     await ble_send(client, f"CMD|12|{track}|$")
 
-def publish_status(event_type, detail):
-    message = {"robot_id": 3, "event_type": event_type, "detail": detail}
+def publish_status(status, detail="", context=None):
+    """escort.status 발행 - status는 반드시 'idle'/'moving'/'arrived' 중 하나 (팀 공식 스키마 MD-AIF-001 기준).
+    context: 'outbound'(목적지로 이동) 또는 'reception'(출발지로 복귀) - moving일 때만 사용"""
+    message = {"robot_id": 3, "status": status, "detail": detail}
+    if context:
+        message["context"] = context
     try:
         import paho.mqtt.client as mqtt
         mc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         mc.connect(MQTT_BROKER, MQTT_PORT, 60)
-        mc.publish("escort/status", json.dumps(message, ensure_ascii=False))
+        mc.publish("escort.status", json.dumps(message, ensure_ascii=False), retain=True)
         mc.disconnect()
     except Exception as e:
         print(f"[MQTT 발행 실패] {e}")
+
+def publish_alert(reason, detail=""):
+    """D파트(보안·대시보드)용 경고 토픽 발행 (통합 Flow MD-TF-001 기준)
+    reason 예: escort_lost (회피 4회 실패)"""
+    msg_id = f"mechdog_c-{int(time.time() * 1000)}"
+    message = {"msg_id": msg_id, "src": "mechdog_c", "level": "WARNING", "reason": reason, "detail": detail}
+    try:
+        import paho.mqtt.client as mqtt
+        mc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        mc.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mc.publish("alert.event", json.dumps(message, ensure_ascii=False))
+        mc.disconnect()
+    except Exception as e:
+        print(f"[alert.event 발행 실패] {e}")
+
+# 복귀 경로 생성용 방향 반전 매핑 (1강우<->5강좌, 2약우<->4약좌, 3직진/7후진은 그대로)
+DIR_MIRROR = {1: 5, 2: 4, 3: 3, 4: 2, 5: 1, 7: 7, 0: 0}
+
+def build_return_steps(forward_steps):
+    """목적지로 갈 때 썼던 스텝을 역순+좌우반전하여 출발지 복귀 경로 생성"""
+    return [
+        {"dir": DIR_MIRROR.get(step["dir"], step["dir"]),
+         "hold_sec": step["hold_sec"],
+         "desc": f"복귀: {step['desc']}"}
+        for step in reversed(forward_steps)
+    ]
+
 
 async def goto_destination(client, dest_id, destinations):
     if dest_id not in destinations:
@@ -207,7 +244,7 @@ async def goto_destination(client, dest_id, destinations):
 
     dest = destinations[dest_id]
     print(f"\n===== 목적지 '{dest['name']}'({dest_id})로 이동 시작 =====")
-    publish_status("이동시작", f"{dest['name']} 방향으로 출발")
+    publish_status("moving", f"{dest['name']} 방향으로 출발", context="outbound")
 
     try:
         for i, step in enumerate(dest["steps"], 1):
@@ -222,7 +259,7 @@ async def goto_destination(client, dest_id, destinations):
         await ble_send(client, "CMD|2|1|8|$")  # scrape_a_bow
         # await play_mp3(client, track=1)  # MP3 음성 안내 - 스피커 하드웨어 불량으로 보류 (2026-09-14)
         await interruptible_sleep(4)  # 동작 재생 대기
-        publish_status("도착완료", f"{dest['name']} 도착, 인사동작 재생")
+        publish_status("arrived", f"{dest['name']} 도착, 인사동작 재생")
 
         print("\n방문자가 터치센서를 눌러 다음 안내를 시작할 수 있습니다.")
         print(f"(최대 {DWELL_SECONDS}초간 대기, 터치 없으면 자동으로 준비 상태 전환)")
@@ -237,13 +274,24 @@ async def goto_destination(client, dest_id, destinations):
         if not touched:
             print("터치 없어 시간 초과, 자동으로 다음 안내 준비 상태로 전환합니다.")
 
-        publish_status("대기준비완료", "다음 방문자 안내 준비 완료")
+        # [추가] C-⑪ 출발점 복귀 주행 (통합 Flow MD-TF-001/AIF-001 반영)
+        print("\n===== 출발지로 복귀 중 =====")
+        publish_status("moving", f"{dest['name']}에서 출발지로 복귀 중", context="reception")
+        return_steps = build_return_steps(dest["steps"])
+        for i, step in enumerate(return_steps, 1):
+            print(f"  [복귀 {i}/{len(return_steps)}] {step['desc']} (dir={step['dir']})")
+            await execute_step_with_obstacle_check(client, step["dir"], step["hold_sec"], context="reception")
+        await stop(client)
+        print("복귀 완료")
+
+        # 복귀를 마친 뒤에야 idle 발행 (Flow 스펙: "복귀를 마친 뒤에야 idle")
+        publish_status("idle", "출발지 복귀 후 다음 방문자 안내 준비 완료")
         print("===== 다음 안내 준비 완료 =====\n")
 
     except EmergencyStop:
         print("비상정지로 인해 이동을 중단합니다.")
         await stop(client)
-        publish_status("비상정지", "사용자에 의해 이동 중단")
+        publish_alert("emergency_stop", "사용자에 의해 이동 중단")
 
 
 async def main():
@@ -272,6 +320,10 @@ async def main():
 
         dest_keys = [k for k in destinations.keys() if not k.startswith("_")]
         print("사용 가능한 목적지:", dest_keys)
+
+        # [추가] C-⓪ 대기 상태 - 시작하자마자 idle 발행 (B는 이 신호를 보고서만 에스코트를 제안함)
+        publish_status("idle", "안내 요청 대기 중")
+
         while not stop_event.is_set():
             try:
                 dest_id = input("이동할 목적지 ID를 입력하세요 (종료: q): ").strip()

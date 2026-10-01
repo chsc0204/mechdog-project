@@ -185,7 +185,8 @@ CREATE TABLE alert_logs (
     reason         TEXT        NOT NULL,     -- 예: unauthorized, no_helmet, no_vest, dialog_timeout, dialog_failed
     resolved       BOOLEAN     NOT NULL DEFAULT false,
     resolved_at    TIMESTAMPTZ,
-    snapshot_path  TEXT
+    snapshot_path  TEXT,
+    detail         TEXT                      -- [추가 2026-09-27] 경고 상세 설명 (예: 회피 4회 실패)
 );
 
 COMMENT ON TABLE  alert_logs          IS '전체 파트 공용 경고 기록 (A/B/D가 함께 사용)';
@@ -193,6 +194,7 @@ COMMENT ON COLUMN alert_logs.msg_id   IS '경고 발행 시 부여하는 고유�
 COMMENT ON COLUMN alert_logs.robot_id IS '경고를 발행한 주체. 실제 로봇 개체(mechdog-04) 또는 발행 파트(mechdog_b) 둘 다 가능';
 COMMENT ON COLUMN alert_logs.level    IS '허용값: WARNING, ALERT';
 COMMENT ON COLUMN alert_logs.reason   IS '예: unauthorized, no_helmet, no_vest (A) / dialog_timeout, dialog_failed (B)';
+COMMENT ON COLUMN alert_logs.detail   IS '경고 상세 설명 (선택). 브릿지가 alert.event의 detail 필드를 저장';
 COMMENT ON COLUMN alert_logs.resolved IS '관리자 해제 시 true로 UPDATE. WHERE msg_id = 매칭값 으로 대상 행 특정';
 
 CREATE INDEX idx_alert_logs_occurred_at ON alert_logs (occurred_at DESC);

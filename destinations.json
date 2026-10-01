@@ -1,0 +1,131 @@
+{
+  "_note": "record_route.py 로 기록한 경로. 키=팀 목적지 코드",
+  "meeting_room_1": {
+    "name": "회의실 1",
+    "steps": [
+      {
+        "dir": 3,
+        "hold_sec": 0.57,
+        "desc": "직진"
+      },
+      {
+        "dir": 4,
+        "hold_sec": 2.15,
+        "desc": "약좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 0.84,
+        "desc": "직진"
+      },
+      {
+        "dir": 4,
+        "hold_sec": 2.53,
+        "desc": "약좌회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 5.92,
+        "desc": "직진"
+      },
+      {
+        "dir": 2,
+        "hold_sec": 0.64,
+        "desc": "약우회전"
+      }
+    ],
+    "return_steps": [
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 5.46,
+        "desc": "직진"
+      },
+      {
+        "dir": 2,
+        "hold_sec": 4.56,
+        "desc": "약우회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      }
+    ],
+    "recorded_at": "2026-09-28 18:03"
+  }
+}
