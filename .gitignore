@@ -34,3 +34,6 @@ snapshots/
 
 *.bak
 *.part
+credentials.env
+escort_ops.log
+.last_test_session

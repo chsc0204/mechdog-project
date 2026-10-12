@@ -5,65 +5,110 @@
     "steps": [
       {
         "dir": 3,
-        "hold_sec": 0.57,
+        "hold_sec": 4.0,
+        "desc": "직진"
+      },
+      {
+        "spin": -40,
+        "count": 40,
+        "desc": "제자리 우회전"
+      },
+      {
+        "spin": -40,
+        "count": 40,
+        "desc": "제자리 우회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 1.73,
+        "desc": "직진"
+      },
+      {
+        "dir": 2,
+        "hold_sec": 1.61,
+        "desc": "약우회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 1.77,
+        "desc": "직진"
+      },
+      {
+        "dir": 2,
+        "hold_sec": 1.09,
+        "desc": "약우회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 2.78,
+        "desc": "직진"
+      },
+      {
+        "dir": 2,
+        "hold_sec": 0.85,
+        "desc": "약우회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 0.62,
         "desc": "직진"
       },
       {
         "dir": 4,
         "hold_sec": 2.15,
         "desc": "약좌회전"
-      },
-      {
-        "spin": 40,
-        "count": 40,
-        "desc": "제자리 좌회전"
-      },
-      {
-        "spin": 40,
-        "count": 40,
-        "desc": "제자리 좌회전"
-      },
-      {
-        "dir": 3,
-        "hold_sec": 0.84,
-        "desc": "직진"
-      },
-      {
-        "dir": 4,
-        "hold_sec": 2.53,
-        "desc": "약좌회전"
-      },
-      {
-        "dir": 3,
-        "hold_sec": 5.92,
-        "desc": "직진"
-      },
-      {
-        "dir": 2,
-        "hold_sec": 0.64,
-        "desc": "약우회전"
       }
     ],
     "return_steps": [
       {
-        "spin": 40,
+        "spin": -40,
         "count": 40,
-        "desc": "제자리 좌회전"
+        "desc": "제자리 우회전"
       },
       {
-        "spin": 40,
+        "spin": -40,
         "count": 40,
-        "desc": "제자리 좌회전"
+        "desc": "제자리 우회전"
       },
       {
-        "spin": 40,
+        "spin": -40,
         "count": 40,
-        "desc": "제자리 좌회전"
+        "desc": "제자리 우회전"
       },
       {
-        "spin": 40,
+        "spin": -40,
         "count": 40,
-        "desc": "제자리 좌회전"
+        "desc": "제자리 우회전"
+      },
+      {
+        "spin": -40,
+        "count": 40,
+        "desc": "제자리 우회전"
+      },
+      {
+        "spin": -40,
+        "count": 40,
+        "desc": "제자리 우회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 1.36,
+        "desc": "직진"
+      },
+      {
+        "dir": 4,
+        "hold_sec": 1.14,
+        "desc": "약좌회전"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 7.83,
+        "desc": "직진"
+      },
+      {
+        "dir": 3,
+        "hold_sec": 1.1,
+        "desc": "직진"
       },
       {
         "spin": 40,
@@ -87,13 +132,28 @@
       },
       {
         "dir": 3,
-        "hold_sec": 5.46,
+        "hold_sec": 3.17,
         "desc": "직진"
       },
       {
+        "dir": 4,
+        "hold_sec": 0.68,
+        "desc": "약좌회전"
+      },
+      {
         "dir": 2,
-        "hold_sec": 4.56,
+        "hold_sec": 2.97,
         "desc": "약우회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
+      },
+      {
+        "spin": 40,
+        "count": 40,
+        "desc": "제자리 좌회전"
       },
       {
         "spin": 40,
@@ -126,6 +186,6 @@
         "desc": "제자리 좌회전"
       }
     ],
-    "recorded_at": "2026-09-28 18:03"
+    "recorded_at": "2026-10-04 14:31"
   }
 }

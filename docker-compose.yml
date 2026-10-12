@@ -40,5 +40,16 @@ services:
       - ./dataset:/data/dataset:ro
     restart: unless-stopped
 
+  adminer:
+    image: adminer
+    container_name: mechdog-adminer
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"   # 브라우저에서 http://localhost:8080 으로 DB 보기
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    restart: unless-stopped
+
 volumes:
   postgres_data:

@@ -34,22 +34,49 @@ import threading
 import time
 
 # ===== 설정 =====
-ROBOT_IP = "172.20.10.6"
+ROBOT_IP = "192.168.45.194"
 ROBOT_PORT = 9027
 DISTANCE_FILE = "demo_routes.json"      # 거리/각도로 적은 시연 경로 (시연 장소에서 숫자만 수정)
 DEST_FILE = "destinations.json"          # record_route.py 로 기록한 경로 (팀 목적지 코드 기준)
 ROUTE_PRIORITY = "distance"              # 같은 목적지가 두 파일에 다 있으면: "distance" 또는 "recorded" 우선
 DEST_FILE_FALLBACK = "destinations_ble.json"  # 기록 파일이 없으면 기존 BLE 웨이포인트 사용
 
-MQTT_BROKER = "localhost"
+MQTT_BROKER = "localhost"   # 우리 Docker 브로커 (우리 DB 브릿지용)
 MQTT_PORT = 1883
+
+# ===== 팀 공용 MQTT 브로커 (TEAM_HANDOFF.md 기준) =====
+TEAM_MQTT_ENABLED = True
+TEAM_MQTT_HOST = "192.168.45.222"      # 분석 PC 주소 (네트워크 바뀌면 담당자에게 새 주소 받기)
+TEAM_MQTT_PORT = 11883
+TEAM_MQTT_USER = "mechdog_c"           # MechDog C 전용 계정 (B 안내 기준, 다른 팀 계정 사용 금지)
+TEAM_CRED_FILE = "credentials.env"     # 비밀번호 파일 (깃 제외) - 이 중 아래 키만 사용
+TEAM_CRED_KEY = "MECHDOG_C_PASS"
+TEAM_SUBSCRIBE = []   # A 판정(gatekeeper/access/decision)은 C 동작에 쓰지 않아 구독 안 함 (필요 시 추가)
+# ===== 자동 출발 트리거 (B파트 목적지 확정 -> C 자동 출발) =====
+TRIGGER_ENABLED = True
+# B->C 인계 계약 (MECHDOG_B_TO_C_DIALOG_HANDOFF.md)
+TEAM_TRIGGER_TOPIC = "mechdog/v1/dialog/result"   # 팀 브로커, 발행자 mechdog_b, QoS 1
+LOCAL_TRIGGER_TOPIC = "mechdog/v1/dialog/result"  # 우리 브로커에서 같은 형식으로 시험 (send_trigger.py)
+TRIGGER_SRC = "mechdog_b"
+ALLOWED_DESTINATIONS = {"reception", "meeting_room_1", "safety_training_room", "inbound_dock",
+                        "outbound_dock", "inspection_area", "elevator_hall", "exit_gate"}
+OPS_LOG = "escort_ops.log"          # 운영 로그 (이동 중 수신한 요청 등 - 버리지 말고 기록)
+TEAM_ENVELOPE = True                # 팀 브로커 발행 시 공통 봉투(ver/msg_id/ts/src/session_id/payload) 사용
+# 우리 토픽 -> 팀 브로커 토픽 이름 (팀 토픽 규약 contracts/mqtt_topics.md 확인 후 필요하면 수정)
+TEAM_TOPIC_MAP = {
+    "alert.event": "mechdog/v1/escort/alert",      # 경고 (escort_lost, emergency_stop, invalid_destination)
+}
+# 에스코트 상태는 아래 하트비트 스레드가 1초마다 발행 (B: 3초 넘게 안 오면 '안내 중'으로 판단)
+TEAM_STATUS_TOPIC = "mechdog/v1/escort/status"
+STATUS_HEARTBEAT_SEC = 1.0
+# 우리 Docker 브로커(DB 저장용)에는 기존 이름(escort.status, alert.event) 그대로 발행
 ROBOT_ID = 3
 
 OBSTACLE_THRESHOLD = 15     # cm 이내면 장애물
 DWELL_SECONDS = 8           # 도착 후 터치 대기 시간
 BOW_WAIT_SECONDS = 5.5      # 인사 동작 대기 (펌웨어: 기본자세 1초 + 동작 4초)
 KEEPALIVE_INTERVAL = 0.3    # 펌웨어 타임아웃 1초보다 충분히 짧게
-QUERY_TIMEOUT = 0.4         # 거리/터치 응답 대기
+QUERY_TIMEOUT = 1.0         # 로봇 응답 대기 (현장 공유기 왕복 0.1~0.7초 실측 -> 0.4에서 상향)
 CHECK_INTERVAL = 0.25       # 이동 중 거리 확인 주기
 MAX_AVOID_ATTEMPTS = 4
 STOP_RESEND = 3
@@ -65,7 +92,7 @@ UTURN_SEC = 4.5       # 목적지 입력에 "uturn" 치면 U턴만 단독 테스
 # ===== 카메라 복귀 (출발지 표식: 초록 공) =====
 # 초록 공은 로봇 출발 위치 "뒤쪽 약 50cm" 바닥에 둠 -> 공 앞 약 50cm에서 멈추면 출발 위치
 # 실측(2026-09-28): 초록 공 r = 50cm 13.7px / 1m 7.6px / 1.5m 5.9px
-CAMERA_ENABLED = True    # 카메라 스트림 사용 (사람 인식, 경고 사진 저장)
+CAMERA_ENABLED = False   # 카메라 스트림 사용 (사람 인식, 경고 사진 저장)
 PERSON_DETECT = True     # 전방 사람 인식 (YOLO) - 사람이면 기다리고, 물건이면 회피
 PERSON_STOP_AREA = 12.0  # 이동 중 전방 사람이 화면의 이 %보다 크게 보이면 미리 멈춤 (약 1m 이내)
 PERSON_RECENT_SEC = 2.0  # 거리센서 감지 시 "방금 전 사람이 보였는지" 확인하는 시간 범위
@@ -376,32 +403,258 @@ class RobotLink:
 
 
 # ===== MQTT =====
+import queue
+trigger_queue = queue.Queue()   # 목적지 확정 트리거 대기열
+escort_busy = [False]           # 안내 중이면 True (이 동안 들어온 트리거는 무시)
+CURRENT_SESSION = [None]        # 트리거로 출발한 방문 세션 ID (상태 메시지에 포함)
+
+
+ESCORT_STATE = {"state": "idle", "detail": "안내 요청 대기 중", "context": None}  # B에 1초마다 보내는 현재 상태
+
+
+def ops_log(text):
+    """운영 로그: 화면 출력 + escort_ops.log 파일에 시각과 함께 기록"""
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}"
+    print(f"\n{text}")
+    try:
+        with open(OPS_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def load_team_password():
+    """credentials.env 에서 우리 계정 비밀번호 하나만 읽음 (값은 화면에 출력하지 않음)"""
+    import os
+    import re
+    if not os.path.exists(TEAM_CRED_FILE):
+        return None
+    with open(TEAM_CRED_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r"\s*(?:export\s+)?" + re.escape(TEAM_CRED_KEY) + r"\s*=\s*(.+?)\s*$", line)
+            if m:
+                return m.group(1).strip().strip("'\"")
+    return None
+
+
 class MqttPub:
+    """우리 브로커(DB 저장용)와 팀 브로커(타 파트 연동) 양쪽에 발행. 팀 브로커는 판정 구독도 함"""
+
     def __init__(self):
-        self.client = None
+        self.client = None       # 우리 Docker 브로커
+        self.team = None         # 팀 공용 브로커 (MQTT 5, 인증)
+        self.team_ok = False
+        self._seen_events = set()
+        self.last_decision = None
+        self._denied = set()
+        self._started_sessions = set()   # 이미 출발 처리한 session_id (같은 세션 재출발 방지)
+        self._seen_msg_ids = set()        # 이미 받은 msg_id (QoS 1 중복 거르기)
         try:
             import paho.mqtt.client as mqtt
+        except ImportError:
+            print("[MQTT] paho-mqtt 미설치 - 발행 없이 이동만 진행 (pip install paho-mqtt)")
+            return
+
+        try:
             c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+            c.on_message = lambda cl, ud, msg: self._on_trigger(msg, "우리 브로커")
             c.connect(MQTT_BROKER, MQTT_PORT, 60)
+            if TRIGGER_ENABLED:
+                c.subscribe(LOCAL_TRIGGER_TOPIC, qos=1)
             c.loop_start()
             self.client = c
-            print("MQTT 연결됨")
+            print("MQTT 연결됨 (우리 브로커)")
         except Exception as e:
-            print(f"[MQTT 연결 실패 - 발행 없이 이동만 진행] {e}")
+            print(f"[MQTT] 우리 브로커 연결 실패 - DB 저장 없이 진행 ({e})")
 
-    def publish(self, topic, message, retain=False):
-        if self.client is None:
+        if TEAM_MQTT_ENABLED:
+            self._connect_team(mqtt)
+            threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+
+    # ---------- 팀 브로커 ----------
+    def _connect_team(self, mqtt):
+        pw = load_team_password()
+        if not pw:
+            print(f"[팀 MQTT] {TEAM_CRED_FILE} 에서 {TEAM_CRED_KEY} 를 찾지 못함 - 팀 연동 생략")
             return
         try:
-            info = self.client.publish(topic, json.dumps(message, ensure_ascii=False), retain=retain)
-            info.wait_for_publish(1.0)
+            t = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"{TEAM_MQTT_USER}-escort",
+                            protocol=mqtt.MQTTv5)
+            t.username_pw_set(TEAM_MQTT_USER, pw)
+            t.on_connect = self._on_team_connect
+            t.on_disconnect = self._on_team_disconnect
+            t.on_message = self._on_team_message
+            t.on_subscribe = self._on_team_subscribe
+            t.on_publish = self._on_team_publish
+            t.reconnect_delay_set(1, 10)
+            t.connect_async(TEAM_MQTT_HOST, TEAM_MQTT_PORT, 30)
+            t.loop_start()
+            self.team = t
+            for _ in range(50):  # 최대 5초 연결 대기
+                if self.team_ok:
+                    break
+                time.sleep(0.1)
+            if not self.team_ok:
+                print(f"[팀 MQTT] {TEAM_MQTT_HOST}:{TEAM_MQTT_PORT} 아직 연결 안 됨 - 백그라운드에서 재시도")
         except Exception as e:
-            print(f"[MQTT 발행 실패] {topic}: {e}")
+            print(f"[팀 MQTT] 연결 실패 ({e}) - 팀 연동 없이 진행")
+
+    def _on_team_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            if not getattr(self, "_refused_shown", False):  # 재접속마다 반복 출력하지 않음
+                self._refused_shown = True
+                print(f"[팀 MQTT] 접속 거부: {reason_code} (계정/비밀번호 확인)")
+            return
+        self.team_ok = True
+        print(f"[팀 MQTT] 연결됨 ({TEAM_MQTT_HOST}:{TEAM_MQTT_PORT}, 계정 {TEAM_MQTT_USER})")
+        for topic in TEAM_SUBSCRIBE:
+            client.subscribe(topic, qos=1)
+        if TRIGGER_ENABLED:
+            client.subscribe(TEAM_TRIGGER_TOPIC, qos=1)
+
+    def _on_team_disconnect(self, client, userdata, flags, reason_code, properties):
+        if self.team_ok and not getattr(self, "_closing", False):
+            print(f"[팀 MQTT] 연결 끊김 ({reason_code}) - 자동 재접속 시도")
+        self.team_ok = False
+
+    def _on_team_subscribe(self, client, userdata, mid, reason_codes, properties):
+        for rc in reason_codes:
+            if rc.is_failure:
+                print(f"[팀 MQTT] 구독 거부: {rc} (계정 권한 확인)")
+
+    def _on_team_publish(self, client, userdata, mid, reason_code, properties):
+        # QoS 1 발행 결과. 권한(ACL) 없는 토픽이면 실패 코드가 옴
+        if reason_code.is_failure and str(reason_code) not in self._denied:
+            self._denied.add(str(reason_code))
+            print(f"[팀 MQTT] 발행 거부: {reason_code} - 이 토픽에 발행 권한이 없을 수 있음 (토픽 규약 확인 필요)")
+
+    def _on_trigger(self, msg, source):
+        """B->C 목적지 인계 (계약: 봉투 ver=1, src=mechdog_b, payload.msg_type=dialog.result).
+        유효한 dialog.result 수신 자체가 목적지 확정 (outcome 필드 없음)"""
+        try:
+            data = json.loads(msg.payload.decode("utf-8"))
+        except Exception:
+            ops_log(f"[트리거 거부] JSON 형식 오류 ({source})")
+            return
+        payload = data.get("payload") or {}
+        sid = data.get("session_id")
+        dest = payload.get("destination")
+        # 1) 계약 검증 - 다르면 이동하지 않음
+        problems = []
+        if data.get("ver") != 1:
+            problems.append(f"ver={data.get('ver')}")
+        if data.get("src") != TRIGGER_SRC:
+            problems.append(f"src={data.get('src')}")
+        if payload.get("msg_type") != "dialog.result":
+            problems.append(f"msg_type={payload.get('msg_type')}")
+        if not sid:
+            problems.append("session_id 없음")
+        if problems:
+            ops_log(f"[트리거 거부] 계약 불일치 ({source}): {', '.join(problems)}")
+            return
+        # 2) msg_id 로 QoS 1 중복 거르기 (조용히 무시), 같은 세션 재출발도 막음
+        mid = data.get("msg_id")
+        if mid and mid in self._seen_msg_ids:
+            return
+        if mid:
+            self._seen_msg_ids.add(mid)
+            if len(self._seen_msg_ids) > 1000:
+                self._seen_msg_ids.clear()
+        if sid in self._started_sessions:
+            ops_log(f"[트리거 중복] 이미 처리한 세션 {sid} - 재출발 안 함")
+            return
+        # 4) 허용되지 않은 목적지 -> 이동 안 함 + 경고
+        if dest not in ALLOWED_DESTINATIONS:
+            ops_log(f"[트리거 거부] 허용되지 않은 목적지 '{dest}' (세션 {sid})")
+            self._started_sessions.add(sid)
+            trigger_queue.put({"invalid": True, "destination": dest, "session_id": sid, "source": source})
+            return
+        # 3) idle 일 때만 출발. 이동 중이면 버리지 않고 운영 로그에 기록
+        if escort_busy[0] or ESCORT_STATE["state"] != "idle":
+            ops_log(f"[트리거 보류] 상태 {ESCORT_STATE['state']} 라서 출발 불가 - 세션 {sid}, 목적지 {dest}, 목적 '{payload.get('purpose', '')}'")
+            return
+        self._started_sessions.add(sid)
+        ops_log(f"[트리거 수신] {source}: 세션 {sid} -> {dest} (목적 '{payload.get('purpose', '')}', "
+                f"신뢰도 {payload.get('confidence')}, 재시도 {payload.get('retry_count', 0)})")
+        trigger_queue.put({"destination": dest, "session_id": sid, "source": source,
+                           "purpose": payload.get("purpose")})
+
+    def _heartbeat_loop(self):
+        """B파트 규약: 에스코트 상태를 1초마다 발행 (idle 중에도). 끊기면 B가 '안내 중'으로 판단"""
+        while not getattr(self, "_closing", False):
+            if self.team is not None and self.team_ok:
+                self.publish_team_status()
+            time.sleep(STATUS_HEARTBEAT_SEC)
+
+    def publish_team_status(self):
+        import uuid
+        from datetime import datetime, timezone, timedelta
+        st = dict(ESCORT_STATE)
+        body = {"msg_type": "escort.status", "robot_id": ROBOT_ID, "state": st["state"], "detail": st["detail"]}
+        if st.get("context"):
+            body["context"] = st["context"]
+        env = {"ver": 1, "msg_id": uuid.uuid4().hex,
+               "ts": datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="milliseconds"),
+               "src": "mechdog_c", "session_id": CURRENT_SESSION[0], "payload": body}
+        try:
+            self.team.publish(TEAM_STATUS_TOPIC, json.dumps(env, ensure_ascii=False), qos=1, retain=False)
+        except Exception:
+            pass
+
+    def _on_team_message(self, client, userdata, msg):
+        """A파트 출입 판정 수신 (QoS 1이라 중복 가능 -> event_id 로 한 번만 처리)"""
+        if msg.topic == TEAM_TRIGGER_TOPIC:
+            self._on_trigger(msg, "팀 브로커")
+            return
+        try:
+            data = json.loads(msg.payload.decode("utf-8"))
+        except Exception:
+            return
+        eid = data.get("event_id")
+        if eid in self._seen_events:
+            return
+        if eid:
+            self._seen_events.add(eid)
+            if len(self._seen_events) > 500:
+                self._seen_events.clear()
+        self.last_decision = (time.time(), data)
+        print(f"\n[A 판정 수신] {data.get('decision')} reasons={data.get('reasons')} event_id={eid}")
+
+    # ---------- 공통 ----------
+    def publish(self, topic, message, retain=False):
+        payload = json.dumps(message, ensure_ascii=False)
+        if self.client is not None:
+            try:
+                info = self.client.publish(topic, payload, retain=retain)
+                info.wait_for_publish(1.0)
+            except Exception as e:
+                print(f"[MQTT 발행 실패] {topic}: {e}")
+        if self.team is not None and self.team_ok and topic in TEAM_TOPIC_MAP:
+            try:
+                team_payload = payload
+                if TEAM_ENVELOPE:  # 팀 공통 봉투: 원래 메시지는 payload 안에, msg_type 으로 종류 표시
+                    import uuid
+                    from datetime import datetime, timezone, timedelta
+                    body = dict(message)
+                    sid = body.pop("session_id", None)
+                    body["msg_type"] = topic  # "escort.status" / "alert.event"
+                    env = {"ver": 1, "msg_id": str(uuid.uuid4()),
+                           "ts": datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="milliseconds"),
+                           "src": "mechdog_c", "session_id": sid, "payload": body}
+                    team_payload = json.dumps(env, ensure_ascii=False)
+                self.team.publish(TEAM_TOPIC_MAP.get(topic, topic), team_payload, qos=1, retain=retain)
+            except Exception as e:
+                print(f"[팀 MQTT 발행 실패] {topic}: {e}")
 
     def close(self):
-        if self.client is not None:
-            self.client.loop_stop()
-            self.client.disconnect()
+        self._closing = True
+        for c in (self.client, self.team):
+            if c is not None:
+                try:
+                    c.loop_stop()
+                    c.disconnect()
+                except Exception:
+                    pass
 
 
 mqtt_pub = None
@@ -412,7 +665,13 @@ def publish_status(status, detail="", context=None):
     message = {"robot_id": ROBOT_ID, "status": status, "detail": detail}
     if context:
         message["context"] = context
-    mqtt_pub.publish("escort.status", message, retain=True)
+    if CURRENT_SESSION[0]:
+        message["session_id"] = CURRENT_SESSION[0]  # 팀 공용 세션 원장과 연결
+    changed = ESCORT_STATE["state"] != status
+    ESCORT_STATE.update({"state": status, "detail": detail, "context": context})
+    mqtt_pub.publish("escort.status", message, retain=True)  # 우리 DB용 (기존 형식)
+    if changed and mqtt_pub.team is not None and mqtt_pub.team_ok:
+        mqtt_pub.publish_team_status()  # 상태가 바뀌면 1초 기다리지 않고 바로 알림
 
 
 def save_snapshot(tag):
@@ -439,6 +698,8 @@ def publish_alert(reason, detail=""):
     """alert.event 발행 + 그 순간 카메라 사진 저장 (alert_logs.snapshot_path)"""
     msg_id = f"mechdog_c-{int(time.time() * 1000)}"
     message = {"msg_id": msg_id, "src": "mechdog_c", "level": "WARNING", "reason": reason, "detail": detail}
+    if CURRENT_SESSION[0]:
+        message["session_id"] = CURRENT_SESSION[0]  # 팀 세션 원장과 연결 (alert_logs.session_id)
     snap = save_snapshot(reason)
     if snap:
         message["snapshot_path"] = snap
@@ -594,7 +855,12 @@ def run_steps(robot, steps, context, label, stop_if=None):
             robot.rotate_wait(step["spin"], step["count"])  # 실제 회전 완료까지 대기
             continue
         print(f"  [{label} {i}/{len(steps)}] {step['desc']} (dir={step['dir']}, {step['hold_sec']}초)")
-        if execute_step(robot, step["dir"], step["hold_sec"], context, stop_if):
+        if "trim" in step:
+            robot.set_trim(step["trim"])          # 이 구간만 다른 쏠림 보정
+        done_early = execute_step(robot, step["dir"], step["hold_sec"], context, stop_if)
+        if "trim" in step:
+            robot.set_trim(CALIB.get("straight_trim", 0))  # 기본값으로 복귀
+        if done_early:
             print(f"  [{label}] 조기 종료 (카메라 조건 충족)")
             return True
     return False
@@ -765,12 +1031,17 @@ def goto_destination(robot, dest_id, destinations):
         robot.escort_mode(False)
         robot.stop()
         robot.led("stop")
+        publish_status("aborted", f"에스코트 중단: {e} - 로봇을 출발지에 놓고 'idle' 입력")
+        print("  상태: aborted (B파트에 '안내 중'으로 표시됨). 로봇을 출발지에 놓은 뒤 'idle' 을 입력하세요")
         print(f"\n[에스코트 중단] {e} - 로봇 위치를 수동으로 확인하세요 (출발지 아님)")
         publish_alert("escort_lost", str(e))
     except EmergencyStop:
         robot.escort_mode(False)
         robot.stop()
         robot.led("stop")
+        publish_status("aborted", "비상정지 - 로봇을 출발지에 놓고 'idle' 입력")
+        stop_event.clear()  # 프로그램은 계속 실행 (aborted 상태를 B에 계속 알리고, 'idle' 입력 대기)
+        print("  상태: aborted (B파트에 '안내 중'으로 표시됨). 로봇을 출발지에 놓은 뒤 'idle' 을 입력하세요")
         print("\n[비상정지] 이동 중단 - 로봇 위치를 수동으로 확인하세요")
         publish_alert("emergency_stop", "사용자에 의해 이동 중단")
 
@@ -799,7 +1070,11 @@ def distance_to_steps(path):
     for seg in path:
         if "go" in seg:
             sec = round(seg["go"] / CALIB["speed_cm_per_s"], 2)
-            steps.append({"dir": 3, "hold_sec": sec, "desc": f"직진 {seg['go']}cm"})
+            st = {"dir": 3, "hold_sec": sec, "desc": f"직진 {seg['go']}cm"}
+            if "trim" in seg:  # 구간별 쏠림 보정 (바닥 상태가 다른 구간용)
+                st["trim"] = seg["trim"]
+                st["desc"] += f" (쏠림보정 {seg['trim']})"
+            steps.append(st)
         elif "back" in seg:
             sec = round(seg["back"] / CALIB["back_speed_cm_per_s"], 2)
             steps.append({"dir": 7, "hold_sec": sec, "desc": f"후진 {seg['back']}cm"})
@@ -818,7 +1093,13 @@ def auto_return_path(path):
     for seg in reversed(path):
         if "wait" in seg:
             continue  # 복귀는 혼자 가므로 대기 생략
-        back.append({"turn": -seg["turn"]} if "turn" in seg else dict(seg))
+        if "turn" in seg:
+            back.append({"turn": -seg["turn"]})
+            continue
+        b = {k: v for k, v in seg.items() if k not in ("trim", "return_trim")}
+        if "return_trim" in seg:  # 같은 바닥도 반대 방향으로 걸으면 쏠림이 달라질 수 있어 따로 지정
+            b["trim"] = seg["return_trim"]
+        back.append(b)
     back.append({"turn": 180})
     return back
 
@@ -942,6 +1223,177 @@ def calibrate(robot, kind, amount):
             save_calibration(key, new)
 
 
+TEAM_DEST_NAMES = {
+    "reception": "안내데스크", "meeting_room_1": "회의실 1", "safety_training_room": "안전교육장",
+    "inbound_dock": "입고 도크", "outbound_dock": "출고 도크", "inspection_area": "검수장",
+    "elevator_hall": "엘리베이터", "exit_gate": "나가는 곳",
+}
+
+
+def parse_route_tokens(tokens):
+    """'R90 F200@-6 L90 F170@4,2 W2' -> path 리스트
+    R/L=오른쪽/왼쪽 회전(도), F/B=직진/후진(cm), W=대기(초)
+    F200@-6 = 이 구간 쏠림 보정 -6 / F200@-6,3 = 갈 때 -6, 복귀할 때 3"""
+    import re
+    path = []
+    for tok in tokens:
+        m = re.fullmatch(r"([RLFBWrlfbw])(\d+(?:\.\d+)?)(?:@(-?\d+)(?:,(-?\d+))?)?", tok)
+        if not m:
+            raise ValueError(f"알 수 없는 구간 '{tok}' (예: R90 L90 F200 B50 W2, 보정은 F200@-6)")
+        kind, num, trim, rtrim = m.group(1).upper(), float(m.group(2)), m.group(3), m.group(4)
+        num = int(num) if num.is_integer() else num
+        if kind in "RL":
+            seg = {"turn": -num if kind == "R" else num}
+        elif kind == "F":
+            seg = {"go": num}
+        elif kind == "B":
+            seg = {"back": num}
+        else:
+            seg = {"wait": num}
+        if trim is not None:
+            if kind not in "F":
+                raise ValueError(f"쏠림 보정(@)은 직진(F)에만 쓸 수 있어요: '{tok}'")
+            seg["trim"] = int(trim)
+            if rtrim is not None:
+                seg["return_trim"] = int(rtrim)
+        path.append(seg)
+    return path
+
+
+def save_route(code, path, name=None):
+    """demo_routes.json 의 한 목적지 경로만 바꿔서 저장 (보정값과 다른 목적지는 그대로, 형식 자동)"""
+    import os
+    import shutil
+    data = {}
+    if os.path.exists(DISTANCE_FILE):
+        with open(DISTANCE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        shutil.copy(DISTANCE_FILE, DISTANCE_FILE + ".bak")
+    entry = data.get(code, {})
+    entry["name"] = name or entry.get("name") or TEAM_DEST_NAMES.get(code, code)
+    entry.setdefault("alias", [])
+    entry["path"] = path
+    entry.pop("return", None)  # 복귀는 자동 생성
+    data[code] = entry
+    with open(DISTANCE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def describe_path(path):
+    out = []
+    for seg in path:
+        if "turn" in seg:
+            out.append(f"{'좌' if seg['turn'] > 0 else '우'}회전 {abs(seg['turn'])}도")
+        elif "go" in seg:
+            t = f" (보정 {seg['trim']}" + (f", 복귀 {seg['return_trim']}" if "return_trim" in seg else "") + ")" if "trim" in seg else ""
+            out.append(f"직진 {seg['go']}cm{t}")
+        elif "back" in seg:
+            out.append(f"후진 {seg['back']}cm")
+        elif "wait" in seg:
+            out.append(f"{seg['wait']}초 대기")
+    return " -> ".join(out)
+
+
+TEAM_DEST_NAMES = {"reception": "안내데스크", "meeting_room_1": "회의실 1", "safety_training_room": "안전교육장",
+                   "inbound_dock": "입고 도크", "outbound_dock": "출고 도크", "inspection_area": "검수장",
+                   "elevator_hall": "엘리베이터", "exit_gate": "나가는 곳"}
+
+ROUTE_HELP = """사용법: route <목적지> <구간들>
+  R90 = 오른쪽 90도 회전   L90 = 왼쪽 90도 회전
+  F200 = 200cm 직진        B50 = 50cm 후진        W2 = 2초 대기
+  F200:-6 = 200cm 직진, 이 구간만 쏠림보정 -6 (왼쪽으로 쏠리면 더 작게(-), 오른쪽으로 쏠리면 더 크게(+))
+  F200:-6:3 = 갈 때 -6, 이 구간을 복귀할 때 3
+  예) route 출고 R90 F200:-6 L90 F170:4"""
+
+
+def parse_route_tokens(tokens):
+    """R90 L90 F200 F200:-6 B50 W2 -> demo_routes.json 의 path 형식"""
+    import re
+    path = []
+    for tok in tokens:
+        m = re.fullmatch(r"([RLFBWrlfbw])(\d+(?:\.\d+)?)(?::(-?\d+))?(?::(-?\d+))?", tok)
+        if not m:
+            raise ValueError(f"알 수 없는 구간 '{tok}'")
+        kind, val, trim, rtrim = m.group(1).upper(), float(m.group(2)), m.group(3), m.group(4)
+        val = int(val) if val.is_integer() else val
+        if kind == "R":
+            path.append({"turn": -val})
+        elif kind == "L":
+            path.append({"turn": val})
+        elif kind == "F":
+            seg = {"go": val}
+            if trim is not None:
+                seg["trim"] = int(trim)
+            if rtrim is not None:
+                seg["return_trim"] = int(rtrim)  # 같은 구간을 복귀할 때의 쏠림보정
+            path.append(seg)
+        elif kind == "B":
+            path.append({"back": val})
+        elif kind == "W":
+            path.append({"wait": val})
+        if trim is not None and kind != "F":
+            raise ValueError(f"쏠림보정(:숫자)은 직진(F)에만 붙일 수 있음: '{tok}'")
+    if not path:
+        raise ValueError("구간이 없음")
+    return path
+
+
+def save_route(code, path, name=None):
+    """demo_routes.json 에서 해당 목적지 경로만 교체 저장 (보정값·다른 목적지는 그대로, 이전 파일은 .bak)"""
+    import os
+    import shutil
+    data = {}
+    if os.path.exists(DISTANCE_FILE):
+        with open(DISTANCE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        shutil.copy(DISTANCE_FILE, DISTANCE_FILE + ".bak")
+    entry = data.get(code, {})
+    entry["name"] = entry.get("name") or name or TEAM_DEST_NAMES.get(code, code)
+    entry["path"] = path
+    entry.pop("return", None)  # 복귀는 자동 생성
+    data[code] = entry
+    with open(DISTANCE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def read_command(prompt):
+    """키보드 입력과 트리거를 동시에 기다림. (입력 문자열, 트리거) 중 하나를 반환
+    Windows: 글자를 한 자씩 받으면서 0.05초마다 트리거 확인 / 그 외: 일반 input()"""
+    if msvcrt is None:
+        return input(prompt).strip(), None
+    print(prompt, end="", flush=True)
+    buf = ""
+    while True:
+        try:
+            trig = trigger_queue.get_nowait()
+            if buf:
+                print(f"\n(입력 중이던 '{buf}' 취소)")
+            else:
+                print()
+            return "", trig
+        except queue.Empty:
+            pass
+        if msvcrt.kbhit():
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"):
+                print()
+                return buf.strip(), None
+            if ch == "\x08":  # Backspace
+                if buf:
+                    buf = buf[:-1]
+                    print("\b \b", end="", flush=True)
+                continue
+            if ch == "\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            if ch in ("\x00", "\xe0"):  # 방향키 등 특수키 무시
+                msvcrt.getwch()
+                continue
+            buf += ch
+            print(ch, end="", flush=True)
+        else:
+            time.sleep(0.05)
+
+
 def print_destinations(destinations):
     print("목적지 (번호, 이름, 별명, 코드 중 아무거나 입력):")
     for i, (code, r) in enumerate(destinations.items(), 1):
@@ -997,7 +1449,11 @@ def main():
                 time.sleep(0.1)
 
     try:
-        battery = robot.request_battery()
+        battery = None
+        for _ in range(3):  # 혼잡한 공유기에서는 첫 응답이 늦을 수 있어 3번까지 시도
+            battery = robot.request_battery()
+            if battery is not None:
+                break
         if battery is None:
             print(f"[경고] 로봇({ROBOT_IP}) 응답 없음 - IP/핫스팟 연결을 확인하세요.")
             print("       (로봇이 명령은 받는데 응답만 못 오는 경우도 있음 -> 거리센서 판단 불가, 주의)")
@@ -1010,8 +1466,28 @@ def main():
         print_destinations(destinations)
         print("[안내] 이동 중 'q' 키(Enter 불필요) 또는 Ctrl+C로 즉시 정지\n")
 
+        if TRIGGER_ENABLED:
+            print("[자동 출발] 목적지 확정 신호를 기다리는 중 (키보드로 직접 입력도 가능)")
         while not stop_event.is_set():
-            dest_id = input("목적지 입력 (번호/이름/별명, 종료: q): ").strip()
+            dest_id, trig = read_command("목적지 입력 (번호/이름/별명, 종료: q): ")
+            if trig is not None:  # B파트 목적지 확정 -> 자동 출발
+                code = None if trig.get("invalid") else resolve_destination(trig["destination"], destinations)
+                if code is None:
+                    reason = "허용되지 않은 목적지" if trig.get("invalid") else "경로 파일에 없는 목적지"
+                    print(f"[트리거] {reason} '{trig['destination']}' - 출발 안 하고 경고 발행")
+                    CURRENT_SESSION[0] = trig.get("session_id")
+                    publish_alert("invalid_destination", f"{reason}: {trig['destination']}")
+                    CURRENT_SESSION[0] = None
+                    continue
+                print(f"[트리거] {trig['source']}에서 목적지 확정 수신: {destinations[code]['name']} -> 자동 출발")
+                CURRENT_SESSION[0] = trig.get("session_id")
+                escort_busy[0] = True
+                try:
+                    goto_destination(robot, code, destinations)
+                finally:
+                    escort_busy[0] = False
+                    CURRENT_SESSION[0] = None
+                continue
             if dest_id.lower() == "q":
                 break
             if dest_id.lower().startswith("calib"):  # 시연 장소 보정: calib go 100 / calib back 50 / calib turn 90 / calib turn 180
@@ -1061,6 +1537,64 @@ def main():
                         print(f"  속도 {old_speed} 유지")
                 else:
                     print("사용법: speed 150 (60~200)")
+                continue
+            if dest_id.lower() == "idle":  # 중단(aborted) 후 로봇을 출발지에 되돌려 놓고 대기 상태로 복귀
+                robot.stop()
+                robot.led("idle")
+                publish_status("idle", "수동 복귀 - 안내 요청 대기 중")
+                stop_event.clear()
+                print("  대기(idle) 상태로 전환. 이제 B파트 안내 요청을 받을 수 있습니다")
+                continue
+            if dest_id.lower() == "mqtt":  # 팀 브로커 연결 상태
+                print(f"  우리 브로커: {'연결됨' if mqtt_pub.client else '연결 안 됨'}")
+                print(f"  팀 브로커 : {'연결됨' if mqtt_pub.team_ok else '연결 안 됨'} ({TEAM_MQTT_HOST}:{TEAM_MQTT_PORT}, {TEAM_MQTT_USER})")
+                print(f"  현재 상태 : {ESCORT_STATE['state']} ({ESCORT_STATE['detail']}) - {TEAM_STATUS_TOPIC} 로 1초마다 발행 중")
+                ld = mqtt_pub.last_decision
+                print(f"  마지막 A 판정: {ld[1].get('decision')} ({time.time() - ld[0]:.0f}초 전)" if ld else "  마지막 A 판정: 없음")
+                continue
+            if dest_id.lower().startswith("route"):  # 경로 변경: route 출고 R90 F200@-6 L90 F170@4
+                parts = dest_id.split()
+                if len(parts) < 3:
+                    print("사용법: route <목적지> <구간들>")
+                    print("  예) route 출고 R90 F200 L90 F170")
+                    print("  R/L=오른쪽/왼쪽 회전(도), F/B=직진/후진(cm), W=대기(초)")
+                    print("  쏠림 보정: F200@-6 (음수=오른쪽으로 보정, 양수=왼쪽으로 보정)")
+                    print("  복귀 구간 보정 따로: F200@-6,3 (갈 때 -6, 돌아올 때 3)")
+                    continue
+                target = resolve_destination(parts[1], destinations) or (parts[1] if parts[1] in ALLOWED_DESTINATIONS else None)
+                if target is None:
+                    print(f"  알 수 없는 목적지 '{parts[1]}'. 팀 목적지 코드: {', '.join(sorted(ALLOWED_DESTINATIONS))}")
+                    continue
+                try:
+                    new_path = parse_route_tokens(parts[2:])
+                except ValueError as ex:
+                    print(f"  {ex}")
+                    continue
+                save_route(target, new_path)
+                destinations = load_all_routes()
+                print(f"  저장 완료 [{target}] {describe_path(new_path)}")
+                print(f"  복귀(자동): {describe_path(auto_return_path(new_path))}")
+                continue
+            if dest_id.lower().startswith("route ") or dest_id.lower() == "route":  # 경로 수정 (JSON 직접 편집 불필요)
+                parts = dest_id.split()
+                if len(parts) < 3:
+                    print(ROUTE_HELP)
+                    continue
+                code = resolve_destination(parts[1], destinations) or (parts[1] if parts[1] in TEAM_DEST_NAMES else None)
+                if code is None:
+                    print(f"  알 수 없는 목적지 '{parts[1]}'. 팀 목적지 코드: {', '.join(TEAM_DEST_NAMES)}")
+                    continue
+                try:
+                    path = parse_route_tokens(parts[2:])
+                except ValueError as ex:
+                    print(f"  {ex}\n{ROUTE_HELP}")
+                    continue
+                save_route(code, path)
+                destinations = load_all_routes()
+                r = destinations[code]
+                print(f"  저장 완료 ({DISTANCE_FILE}, 이전 파일은 .bak)")
+                print(f"  {r['name']} 가는 길 : " + " -> ".join(st.get("desc", "") for st in r["steps"]))
+                print(f"  {r['name']} 돌아오기: " + " -> ".join(st.get("desc", "") for st in r["return_steps"]))
                 continue
             if dest_id.lower() == "routes":  # 현재 경로 확인
                 for code, r in destinations.items():
@@ -1112,7 +1646,11 @@ def main():
                     print(f"알 수 없는 목적지: {dest_id}")
                 print_destinations(destinations)
                 continue
-            goto_destination(robot, code, destinations)
+            escort_busy[0] = True
+            try:
+                goto_destination(robot, code, destinations)
+            finally:
+                escort_busy[0] = False
 
     except KeyboardInterrupt:
         print("\nCtrl+C - 정지합니다")

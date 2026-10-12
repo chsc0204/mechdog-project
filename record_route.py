@@ -141,6 +141,10 @@ def main():
             print(f"[경고] 로봇({ew.ROBOT_IP}) 응답 없음 - 연결 확인 후 다시 실행하세요")
             return
         print("로봇 연결 확인")
+        # 재생(escort_wifi.py)과 같은 속도/쏠림 보정으로 기록해야 재생 결과가 같아짐
+        ew.load_all_routes()
+        robot.set_trim(ew.CALIB.get("straight_trim", 0), ew.CALIB.get("straight_speed", 120))
+        print(f"보정값 적용: 직진 속도 {ew.CALIB.get('straight_speed', 120)}, 쏠림 보정 {ew.CALIB.get('straight_trim', 0)}")
 
         routes = load_routes()
         codes = list(TEAM_DESTINATIONS)
